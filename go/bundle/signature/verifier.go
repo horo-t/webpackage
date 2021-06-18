@@ -110,9 +110,15 @@ func verifyVouchedSubset(vs *bundle.VouchedSubset, authorities []*certurl.Augmen
 		return nil, errors.New("signature: authority index out of range")
 	}
 	cert := authorities[vs.Authority]
-	verifier, err := signingalgorithm.VerifierForPublicKey(cert.Cert.PublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("signature: unsupported certificate public key: %v", err)
+	var verifier signingalgorithm.Verifier
+	var err error
+	if cert.Cert != nil {
+		verifier, err = signingalgorithm.VerifierForPublicKey(cert.Cert.PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("signature: unsupported certificate public key: %v", err)
+		}
+	} else {
+		verifier = signingalgorithm.VerifierForEd25519Key(cert.Ed25519PublicKey)
 	}
 	msg := generateSignedMessage(vs.Signed, ver)
 	ok, err := verifier.Verify(msg, vs.Sig)

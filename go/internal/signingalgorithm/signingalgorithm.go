@@ -3,6 +3,7 @@ package signingalgorithm
 import (
 	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	_ "crypto/sha256"
 	_ "crypto/sha512"
@@ -90,4 +91,16 @@ func VerifierForPublicKey(k crypto.PublicKey) (Verifier, error) {
 		}
 	}
 	return nil, fmt.Errorf("signingalgorithm: unknown public key type: %T", k)
+}
+
+type ed25519Verifier struct {
+	pubKey ed25519.PublicKey
+}
+
+func (e *ed25519Verifier) Verify(msg, sig []byte) (bool, error) {
+	return ed25519.Verify(e.pubKey, msg, sig), nil
+}
+
+func VerifierForEd25519Key(k ed25519.PublicKey) (Verifier) {
+	return &ed25519Verifier{k}
 }

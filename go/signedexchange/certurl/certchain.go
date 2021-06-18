@@ -4,6 +4,7 @@ package certurl
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
@@ -19,6 +20,7 @@ import (
 // https://wicg.github.io/webpackage/draft-yasskin-http-origin-signed-responses.html#cert-chain-format
 type AugmentedCertificate struct {
 	Cert         *x509.Certificate // A parsed X.509 certificate.
+	Ed25519PublicKey ed25519.PublicKey
 	OCSPResponse []byte            // DER-encoded OCSP response for Cert.
 	SCTList      []byte            // SignedCertificateTimestampList (Section 3.3 of RFC6962) for Cert.
 }
@@ -48,6 +50,9 @@ func NewCertChain(certs []*x509.Certificate, ocsp, sct []byte) (CertChain, error
 func (certChain CertChain) Validate() error {
 	if len(certChain) == 0 {
 		return errors.New("cert-chain: cert chain must not be empty")
+	}
+	if certChain[0].Ed25519PublicKey != nil {
+		return nil
 	}
 	for i, item := range certChain {
 		if i == 0 && item.OCSPResponse == nil {
@@ -89,7 +94,11 @@ func (ac *AugmentedCertificate) EncodeTo(enc *cbor.Encoder) error {
 	mes := []*cbor.MapEntryEncoder{
 		cbor.GenerateMapEntry(func(keyE *cbor.Encoder, valueE *cbor.Encoder) {
 			keyE.EncodeTextString("cert")
-			valueE.EncodeByteString(ac.Cert.Raw)
+			if ac.Ed25519PublicKey != nil {
+				valueE.EncodeByteString(ac.Ed25519PublicKey)
+			} else {
+				valueE.EncodeByteString(ac.Cert.Raw)
+			}
 		}),
 	}
 	if ac.OCSPResponse != nil {
@@ -111,7 +120,12 @@ func (ac *AugmentedCertificate) EncodeTo(enc *cbor.Encoder) error {
 
 // CertSha256 returns SHA-256 hash of the DER-encoded X.509v3 certificate.
 func (ac *AugmentedCertificate) CertSha256() []byte {
-	sum := sha256.Sum256(ac.Cert.Raw)
+	if ac.Cert != nil {
+		sum := sha256.Sum256(ac.Cert.Raw)
+		return sum[:]
+	}
+	pub, _ := x509.MarshalPKIXPublicKey(ac.Ed25519PublicKey)
+	sum := sha256.Sum256(pub)
 	return sum[:]
 }
 
@@ -167,7 +181,16 @@ func DecodeAugmentedCertificateFrom(dec *cbor.Decoder) (*AugmentedCertificate, e
 		case "cert":
 			ac.Cert, err = x509.ParseCertificate(value)
 			if err != nil {
-				return nil, fmt.Errorf("cert-chain: cannot parse X.509 certificate: %v", err)
+				pubkey, err := x509.ParsePKIXPublicKey(value) 
+				if err != nil {
+					return nil, fmt.Errorf("cert-chain: cannot parse X.509 PKIX, ASN.1 DER certificate: %v", err)
+				}
+				switch typedKey := pubkey.(type) {
+				case ed25519.PublicKey:
+					ac.Ed25519PublicKey = typedKey
+				default:
+					return nil, fmt.Errorf("cert-chain: unsupported public key")
+				}
 			}
 		case "ocsp":
 			ac.OCSPResponse = value
@@ -175,7 +198,7 @@ func DecodeAugmentedCertificateFrom(dec *cbor.Decoder) (*AugmentedCertificate, e
 			ac.SCTList = value
 		}
 	}
-	if ac.Cert == nil {
+	if (ac.Cert == nil) && (ac.Ed25519PublicKey == nil) {
 		return nil, fmt.Errorf("cert-chain: certificate map must have \"cert\" key.")
 	}
 	return ac, nil

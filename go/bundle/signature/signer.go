@@ -3,7 +3,9 @@ package signature
 import (
 	"bytes"
 	"crypto"
+	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/x509"
 	"errors"
 	"io"
 	"net/url"
@@ -21,6 +23,7 @@ type Signer struct {
 	Certs   certurl.CertChain
 	PrivKey crypto.PrivateKey
 	Rand    io.Reader
+	Ed25519Key ed25519.PrivateKey
 	SignedSubset
 }
 
@@ -89,21 +92,23 @@ func (s *SignedSubset) Encode() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func NewSigner(ver version.Version, certs certurl.CertChain, privKey crypto.PrivateKey, validityUrl *url.URL, date time.Time, duration time.Duration) (*Signer, error) {
+func NewSigner(ver version.Version, certs certurl.CertChain, privKey crypto.PrivateKey, ed25519Key ed25519.PrivateKey, validityUrl *url.URL, date time.Time, duration time.Duration) (*Signer, error) {
 	if ver == version.Unversioned {
 		return nil, errors.New("signature: unversioned bundles cannot be signed")
 	}
+	var authSha256 []byte
 
 	if err := certs.Validate(); err != nil {
 		return nil, err
 	}
-	authSha256 := certs[0].CertSha256()
+	authSha256 = certs[0].CertSha256()
 
 	return &Signer{
 		Version: ver,
 		Certs:   certs,
 		PrivKey: privKey,
 		Rand:    rand.Reader,
+		Ed25519Key: ed25519Key,
 		SignedSubset: SignedSubset{
 			ValidityUrl:  validityUrl,
 			AuthSha256:   authSha256,
@@ -116,6 +121,9 @@ func NewSigner(ver version.Version, certs certurl.CertChain, privKey crypto.Priv
 
 // CanSignForURL returns true iff this signer can sign for a resource with given URL.
 func (s *Signer) CanSignForURL(u *url.URL) bool {
+	if s.Ed25519Key != nil {
+		return true
+	}
 	return s.Certs[0].Cert.VerifyHostname(u.Hostname()) == nil
 }
 
@@ -148,7 +156,12 @@ func (s *Signer) UpdateSignatures(signatures *bundle.Signatures) (*bundle.Signat
 
 	authorityIndex := len(signatures.Authorities)
 	// TODO: Deduplicate intermediate certificates.
-	signatures.Authorities = append(signatures.Authorities, s.Certs...)
+	if s.Ed25519Key != nil {
+		pub, _ := x509.MarshalPKIXPublicKey(s.Ed25519Key.Public())
+		signatures.Authorities = append(signatures.Authorities, &certurl.AugmentedCertificate{Ed25519PublicKey: pub})
+	} else {
+		signatures.Authorities = append(signatures.Authorities, s.Certs...)
+	}
 	signedSubsetBytes, err := s.SignedSubset.Encode()
 	if err != nil {
 		return nil, err
@@ -167,6 +180,10 @@ func (s *Signer) UpdateSignatures(signatures *bundle.Signatures) (*bundle.Signat
 }
 
 func (s *Signer) sign(signed []byte) ([]byte, error) {
+	if s.Ed25519Key != nil {
+		result := ed25519.Sign(s.Ed25519Key, generateSignedMessage(signed, s.Version))
+		return result, nil
+	}
 	alg, err := signingalgorithm.SigningAlgorithmForPrivateKey(s.PrivKey, s.Rand)
 	if err != nil {
 		return nil, err

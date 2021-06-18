@@ -111,10 +111,14 @@ func run() error {
 		fmt.Println("Signatures:")
 		for i, ac := range b.Signatures.Authorities {
 			fmt.Printf("  Certificate #%d:\n", i)
-			fmt.Println("    Subject:", ac.Cert.Subject.CommonName)
-			fmt.Println("    Valid from:", ac.Cert.NotBefore)
-			fmt.Println("    Valid until:", ac.Cert.NotAfter)
-			fmt.Println("    Issuer:", ac.Cert.Issuer.CommonName)
+			if ac.Cert != nil {
+				fmt.Println("    Subject:", ac.Cert.Subject.CommonName)
+				fmt.Println("    Valid from:", ac.Cert.NotBefore)
+				fmt.Println("    Valid until:", ac.Cert.NotAfter)
+				fmt.Println("    Issuer:", ac.Cert.Issuer.CommonName)
+			} else {
+				fmt.Println("    Ed25519PublicKey:", ac.Ed25519PublicKey)
+			}
 		}
 		var err error
 		verifier, err = signature.NewVerifier(b.Signatures, time.Now(), b.Version)
